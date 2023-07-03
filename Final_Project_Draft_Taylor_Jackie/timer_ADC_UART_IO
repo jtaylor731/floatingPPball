@@ -1,0 +1,41 @@
+   // LEDs
+    initialize_LEDS(LED1, RED); // LED1 -> can only do red
+    initialize_LEDS(LED2, RED|BLUE|GREEN); // LED2 --> RGB
+
+    //for timers
+    WDT_A_holdTimer(); // stop  s WDT
+    FPU_enableModule();
+    CS_setDCOFrequency(3E+6); // 3 MHz
+    CS_initClockSignal(CS_SMCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1);
+    CS_setReferenceOscillatorFrequency(CS_REFO_128KHZ);
+    CS_initClockSignal(CS_ACLK, CS_REFOCLK_SELECT,CS_CLOCK_DIVIDER_1);
+
+    // Set Inputs & Outputs
+    GPIO_setAsInputPinWithPullUpResistor(GPIO_PORT_P1,GPIO_PIN1); // S1 as an input
+    GPIO_setAsInputPinWithPullUpResistor(GPIO_PORT_P1,GPIO_PIN4); // S2 as an input
+
+    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P5,GPIO_PIN5,GPIO_TERTIARY_MODULE_FUNCTION); // ADC Pin P5.5
+    GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P2,GPIO_PIN6,GPIO_PRIMARY_MODULE_FUNCTION); // P5.6 --> Pin2
+    GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P2,GPIO_PIN7,GPIO_PRIMARY_MODULE_FUNCTION); // P5.7 --> Pin7
+
+    // Disable all Interrupts
+    Interrupt_disableMaster();
+
+    // ADC Configuration
+    ADC14_enableModule(); // initialize module
+    ADC14_setResolution(ADC_10BIT); // bit res = 10
+    ADC14_initModule(ADC_CLOCKSOURCE_SMCLK,ADC_PREDIVIDER_1,ADC_DIVIDER_1, false); // tie to SMCLK with no divider
+        // should this be ^^ to a tied to a different clock
+
+    ADC14_configureSingleSampleMode(ADC_MEM0, false); // Place Result of Conversion in ADC_MEM0 register
+    ADC14_configureConversionMemory(ADC_MEM0, ADC_VREFPOS_INTBUF_VREFNEG_VSS, ADC_INPUT_A0, false);
+    REF_A_setReferenceVoltage(REF_A_VREF2_5V);
+        // ^^ what should this reference voltage be
+    ADC14_enableSampleTimer(ADC_MANUAL_ITERATION);
+
+    Timer_A_configureUpMode(TIMER_A1_BASE, &upConfig); // Timer_A1 NOT A0 (because thats in use??)
+    Interrupt_enableInterrupt(INT_TA1_0);               // Enable A interrupt
+    Timer_A_startCounter(TIMER_A1_BASE,TIMER_A_UP_MODE); // Start Timer A
+    ADC14_enableConversion(); // ENC Bit
+
+    Interrupt_enableMaster(); // enable all interrupts

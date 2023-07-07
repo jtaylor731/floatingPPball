@@ -26,7 +26,7 @@
 const uint16_t ta1ccr0 = 3000;
 volatile float dutyCycle = 0; // subject to change based on interrupt
 volatile float pot_v;
-volatile float ADC_result;
+volatile float ADCresult;
 volatile float test;
 
 unsigned short sw1_cur = 1; // current state of click
@@ -42,9 +42,9 @@ volatile bool readingUART = false; // monitors if UART is reading or writing
 // TIMER
 const Timer_A_UpModeConfig upConfig =
 {
- TIMER_A_CLOCKSOURCE_ACLK,          // ACLK Clock Source = 128 kHz
- TIMER_A_CLOCKSOURCE_DIVIDER_4,     // 128 Hz / 4 = 32000 Hz (CCR0 counts up this many times per second)
- 3200,                              // This is CCR0: used to set the timer period: 3200 / 32000 = 0.1s period = 10 Hz
+ TIMER_A_CLOCKSOURCE_SMCLK,          // Frequency = 3 MHz
+ TIMER_A_CLOCKSOURCE_DIVIDER_64,     // 3 Hz / 54 = 46875 Hz (CCR0 counts up this many times per second)
+ 46875*2,                              // This is CCR0: used to set the timer period: 3200 / 32000 = 0.1s period = 10 Hz
  TIMER_A_TAIE_INTERRUPT_DISABLE,
  TIMER_A_CCIE_CCR0_INTERRUPT_ENABLE,
  TIMER_A_DO_CLEAR
@@ -171,13 +171,6 @@ void main(void)
 ///////////////////// FUNCTIONS / INERRUPTS ///////////////////////
 
 
-// Timer Interrupt Handler - triggers at every period set in confiH
-void TA1_0_IRQHandler(void) // checks setpoint from PUTTY Eventually...
-{
-
-    Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE, TIMER_A_CAPTURECOMPARE_REGISTER_0);
-}
-
 // UART Interrupt Handler - triggers when register is flagged
 void EUSCIA0_IRQHandler(){
 
@@ -229,4 +222,20 @@ void EUSCIA0_IRQHandler(){
         UART_clearInterruptFlag(EUSCI_A0_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT_FLAG);
      } // end if enabled and if flagged
 
-} // end of interrupt
+} // end of UART interrupt
+
+// Timer Interrupt Handler - triggers at every period (set in config)
+  void TA1_0_IRQHandler(){
+
+      // read feed back from ultrasonic sensor
+      Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE,TIMER_A_CAPTURECOMPARE_REGISTER_0); // clears timer ate A0 interupt
+      ADC14_toggleConversionTrigger(); // sets SC / trigger bit
+
+      while(ADC14_isBusy()){}     // waits for conversion to finish
+      ADCresult = ADC14_getResult(ADC_MEM0) ; // read from memory
+      printf("Result = %f \r\n",2.5*(float)ADCresult) /1024.0;
+
+
+  } // end timer interrupt
+
+

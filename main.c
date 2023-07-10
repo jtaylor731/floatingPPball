@@ -23,18 +23,19 @@
 
 
 // GLOBAL VARIABLES
-const uint16_t ta1ccr0 = 3000;
+const uint16_t ta0ccr0 = 3000;
 volatile float dutyCycle = 0; // subject to change based on interrupt
 volatile float pot_v;
 volatile float ADCresult;
+volatile float height;
 volatile float test;
 
 unsigned short sw1_cur = 1; // current state of click
 unsigned short sw1_old = 1; // previous state of click
 unsigned short onoff1 = 0; // checks if SW1 'on' or 'off'
 
-float highest = 36; // highest setpoint
-float lowest = 3; // lowest setpoint
+float highest = 42; // highest setpoint
+float lowest = 0; // lowest setpoint
 
 volatile uint16_t setPoint = 0; // Set point
 volatile bool readingUART = false; // monitors if UART is reading or writing
@@ -56,8 +57,8 @@ Timer_A_PWMConfig pwmConfig =
 {
  TIMER_A_CLOCKSOURCE_SMCLK,          // Frequency = 3 MHz
  TIMER_A_CLOCKSOURCE_DIVIDER_1,      // 3 MHz / 1 = 3 MHz
- ta1ccr0,                               // TA2CCR0: 3000/ (1) / (3,000,000 Hz) = (0.001 s ) PWM period = 1000
- TIMER_A_CAPTURECOMPARE_REGISTER_1 , // TA2CCR1 Resister - pin 2.4 T0.1
+ ta0ccr0,                               // TA2CCR0: 3000/ (1) / (3,000,000 Hz) = (0.001 s ) PWM period = 1000
+ TIMER_A_CAPTURECOMPARE_REGISTER_3 , // TA2CCR1 Resister - pin 2.4 T0.1
  TIMER_A_OUTPUTMODE_RESET_SET,
  0                                   // TA2CCR1:inital value (duty cycle)
 };
@@ -78,6 +79,7 @@ const eUSCI_UART_Config UART_init =
 
 ///////////////////// MAIN CODE ///////////////////////
 void main(void)
+
 {
     // Set up LEDs
     initialize_LEDS(LED2,RED|GREEN|BLUE);
@@ -95,7 +97,7 @@ void main(void)
     GPIO_setAsInputPinWithPullUpResistor(GPIO_PORT_P1,GPIO_PIN4); // S2 as an input
 
     GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P5,GPIO_PIN5,GPIO_TERTIARY_MODULE_FUNCTION); // ADC Pin P5.5 - for sensor feedback
-    GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P2,GPIO_PIN4,GPIO_PRIMARY_MODULE_FUNCTION); // P2.4 --> Out to fan
+    GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P2,GPIO_PIN6,GPIO_PRIMARY_MODULE_FUNCTION); // P2.4 --> Out to fan
 
     // ***** UART SET UP ***** // (from Lab 4- Putty and UART)
     GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P1, GPIO_PIN2 | GPIO_PIN3, GPIO_PRIMARY_MODULE_FUNCTION);// GPIO and UART TX/RX
@@ -129,8 +131,8 @@ void main(void)
     Timer_A_generatePWM(TIMER_A0_BASE, &pwmConfig);
 
     // Set initial state
-    setPoint = 3;
-    UART_sendString("\r\n Select Setpoint from 3'' to 36'' : \n\r");   // Promot User and reset setpoint
+    setPoint = 0;
+    UART_sendString("\r\n Select Setpoint from 0'' to 42'' : \n\r");   // Promot User and reset setpoint
 
 
     while(1){
@@ -156,12 +158,12 @@ void main(void)
         // Turns on Motor and Light when SW1 ON
         if( onoff1 == 1 ){ // if remainder is 1 ... switch 1 is ON
             GPIO_setOutputHighOnPin(LED2,BLUE);
-            printf("\r\n Duty Cycle: %f ---- To Board: %f", dutyCycle, dutyCycle * ta1ccr0);
+//            printf("\r\n Duty Cycle: %f ---- To Board: %f", dutyCycle, dutyCycle * ta0ccr0);
 
-            TIMER_A0->CCR[1] = dutyCycle * ta1ccr0;    // pin 2.4 gets PWM voltage
+            TIMER_A0->CCR[3] = dutyCycle * ta0ccr0;    // pin 2.4 gets PWM voltage
         } else{
             GPIO_setOutputLowOnPin(LED2,BLUE);
-            TIMER_A0->CCR[1] = 0;
+            TIMER_A0->CCR[3] = 0;
         }
 
     } // end while
@@ -204,14 +206,14 @@ void EUSCIA0_IRQHandler(){
 
 
             if(atoi(input) < lowest || atoi(input) > highest){
-                UART_sendString("\r\n Invalid Setpoint. Select number 3 - 36:\r\n ");
+                UART_sendString("\r\n Invalid Setpoint. Select number 0 - 42:\r\n ");
 
             }else {
                 input[len] = '\0'; // clears input
                 setPoint = atoi(input); // Convert input string to an integer
-                UART_sendString("\r\n Setpoint: \r\n");
+                UART_sendString("\r\n Setpoint: ");
                 UART_sendInt(setPoint);
-                UART_sendString("\r\n Select Setpoint from 3'' to 36'' : \n\r");   // Promot User and reset setpoint
+                UART_sendString("\r\n Select Setpoint from 0'' to 42'' : \n\r");   // Promot User and reset setpoint
 
             }
 
@@ -233,7 +235,17 @@ void EUSCIA0_IRQHandler(){
 
       while(ADC14_isBusy()){}     // waits for conversion to finish
       ADCresult = ADC14_getResult(ADC_MEM0) ; // read from memory
-      printf("Result = %f \r\n",2.5*(float)ADCresult) /1024.0;
+      ADCresult = (2.5*(float)ADCresult) /1024.0;
+//      printf("Result = %f \r\n",2.5*(float)ADCresult) /1024.0;
+      height = ( -121* ADCresult + 52) ;
+      printf("Height = %u \r\n" , (uint16_t)height);
+
+      // Hysterisis
+
+      /* if(percent change > x) {
+       * let old result = new result
+       * }
+       */
 
 
   } // end timer interrupt

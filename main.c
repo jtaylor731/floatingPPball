@@ -12,6 +12,8 @@
 #include "msp.h"
 #include "driverlib.h"
 #include "myHeaderFile.h"
+#include <math.h>
+
 
 ///////////////////// SETUP ///////////////////////
 // DEFINE
@@ -28,7 +30,6 @@ volatile float dutyCycle = 0; // subject to change based on interrupt
 volatile float pot_v;
 volatile float ADCresult;
 volatile float height;
-volatile float test;
 
 unsigned short sw1_cur = 1; // current state of click
 unsigned short sw1_old = 1; // previous state of click
@@ -36,16 +37,28 @@ unsigned short onoff1 = 0; // checks if SW1 'on' or 'off'
 
 float highest = 42; // highest setpoint
 float lowest = 0; // lowest setpoint
+volatile float prevHeight = 0; // for hysteresis
+volatile float hyst = 5; // Hysteresis
 
 volatile uint16_t setPoint = 0; // Set point
 volatile bool readingUART = false; // monitors if UART is reading or writing
+
+float Kp = 3.5; // Proportional gain
+float Ki = 0.0; // Integral gain
+float Kd = 0.0; // Derivative gain
+
+float error = 0; // error
+float prev_error = 0; // previous error
+float integralTerm = 0; // tracks integral
+float der = 0; // tracks derivative error
+volatile float controlSignal = 0.0; // control signal
 
 // TIMER
 const Timer_A_UpModeConfig upConfig =
 {
  TIMER_A_CLOCKSOURCE_SMCLK,          // Frequency = 3 MHz
  TIMER_A_CLOCKSOURCE_DIVIDER_64,     // 3 Hz / 54 = 46875 Hz (CCR0 counts up this many times per second)
- 46875*2,                              // This is CCR0: used to set the timer period: 3200 / 32000 = 0.1s period = 10 Hz
+ 46875*10,                              // This is CCR0: used to set the timer period: 3200 / 32000 = 0.1s period = 10 Hz
  TIMER_A_TAIE_INTERRUPT_DISABLE,
  TIMER_A_CCIE_CCR0_INTERRUPT_ENABLE,
  TIMER_A_DO_CLEAR
@@ -93,6 +106,7 @@ void main(void)
     CS_initClockSignal(CS_ACLK, CS_REFOCLK_SELECT,CS_CLOCK_DIVIDER_1);
 
     // ***** Set Inputs & Outputs ***** //
+
     GPIO_setAsInputPinWithPullUpResistor(GPIO_PORT_P1,GPIO_PIN1); // S1 as an input
     GPIO_setAsInputPinWithPullUpResistor(GPIO_PORT_P1,GPIO_PIN4); // S2 as an input
 
@@ -151,16 +165,17 @@ void main(void)
                 onoff1 = 0;
         }
 
-        // Setpoint Processing
+        // ***** SETPOINT PROCESSING ***** //
         dutyCycle = inch2percent( (float)setPoint);
 //        printf("\r\n Duty Cycle: %f ---- Setpoint: %u", dutyCycle, setPoint);
 
-        // Turns on Motor and Light when SW1 ON
+        // ***** FAN OF CONTROL ***** //
         if( onoff1 == 1 ){ // if remainder is 1 ... switch 1 is ON
             GPIO_setOutputHighOnPin(LED2,BLUE);
 //            printf("\r\n Duty Cycle: %f ---- To Board: %f", dutyCycle, dutyCycle * ta0ccr0);
 
-            TIMER_A0->CCR[3] = dutyCycle * ta0ccr0;    // pin 2.4 gets PWM voltage
+//            printf("\r\n Control Signal: %f" , controlSignal);
+            TIMER_A0->CCR[3] = (uint16_t)(controlSignal / 100.0 * ta0ccr0);
         } else{
             GPIO_setOutputLowOnPin(LED2,BLUE);
             TIMER_A0->CCR[3] = 0;
@@ -171,7 +186,6 @@ void main(void)
 
 
 ///////////////////// FUNCTIONS / INERRUPTS ///////////////////////
-
 
 // UART Interrupt Handler - triggers when register is flagged
 void EUSCIA0_IRQHandler(){
@@ -216,38 +230,63 @@ void EUSCIA0_IRQHandler(){
                 UART_sendString("\r\n Select Setpoint from 0'' to 42'' : \n\r");   // Promot User and reset setpoint
 
             }
-
-
         } else {
             readingUART = true;
         } //  end 'if reading'
-        UART_clearInterruptFlag(EUSCI_A0_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT_FLAG);
-     } // end if enabled and if flagged
 
+        UART_clearInterruptFlag(EUSCI_A0_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT_FLAG);
+
+     } // end if enabled and if flagged
 } // end of UART interrupt
 
 // Timer Interrupt Handler - triggers at every period (set in config)
   void TA1_0_IRQHandler(){
+      GPIO_toggleOutputOnPin(LED1, RED); // Toggle the LED2 (Blue) pin
 
       // read feed back from ultrasonic sensor
       Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE,TIMER_A_CAPTURECOMPARE_REGISTER_0); // clears timer ate A0 interupt
       ADC14_toggleConversionTrigger(); // sets SC / trigger bit
 
+      // ***** READING SENSOR ***** //
       while(ADC14_isBusy()){}     // waits for conversion to finish
       ADCresult = ADC14_getResult(ADC_MEM0) ; // read from memory
       ADCresult = (2.5*(float)ADCresult) /1024.0;
-//      printf("Result = %f \r\n",2.5*(float)ADCresult) /1024.0;
-      height = ( -121* ADCresult + 52) ;
-      printf("Height = %u \r\n" , (uint16_t)height);
+      height = ( -125 * ADCresult +54);
 
-      // Hysterisis
+//      printf("Result = %f \r\n", ADCresult);
+      printf("Height = %d \r\n" , (int)round(height));
+      printf("------------------------\r\n");
 
-      /* if(percent change > x) {
-       * let old result = new result
-       * }
-       */
+      // Height Hysteresis
+      float heightDiff = height - prevHeight;
 
+//      if( heightDiff > hyst){
+//          height = prevHeight;
+//          printf("Hysteresis Used \r\n");
+//      }else if( heightDiff < -hyst){
+//          height = prevHeight;
+//          printf("Hysteresis Used \r\n");
+//      }
+//
+//      prevHeight = height;
 
-  } // end timer interrupt
+      // ***** CONTROLLER ***** //
+      float error = (float)setPoint - height ; // Calculate Error
+      controlSignal = Kp*error  + Ki*integralTerm + Kd*(error - prev_error); // Update PID
+
+      integralTerm += error;
+      prev_error = error;
+
+      if (controlSignal < 0 ){ // saturation limit
+          controlSignal = 0;
+      } else if (controlSignal > 100){
+          controlSignal = 100;
+      }
+      printf("\r\n\ Test: %u ", (uint16_t)(controlSignal / 100.0 * ta0ccr0) );
+
+      // Clear interrupt flag
+      Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE, TIMER_A_CAPTURECOMPARE_REGISTER_0);
+
+} // end timer interrupt
 
 

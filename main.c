@@ -53,6 +53,10 @@ float integralTerm = 0; // tracks integral
 float der = 0; // tracks derivative error
 volatile float controlSignal = 0.0; // control signal
 
+volatile uint32_t dataSendTime = 0; // how often hegiht gets sent
+volatile uint32_t currentTimeMillis = 0; // milliseconds
+
+
 // TIMER
 const Timer_A_UpModeConfig upConfig =
 {
@@ -119,7 +123,6 @@ void main(void)
     UART_enableModule(EUSCI_A0_BASE);// Initialize UART 0
     UART_enableInterrupt(EUSCI_A0_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT);    // Enable UART receive interrupts
     Interrupt_enableInterrupt(INT_EUSCIA0);
-    Interrupt_enableMaster();    // Enable Interrupt at NVIC
 
     // Disable all Interrupts
     Interrupt_disableMaster();
@@ -139,6 +142,15 @@ void main(void)
     Interrupt_enableInterrupt(INT_TA1_0);               // Enable A interrupt
     Timer_A_startCounter(TIMER_A1_BASE,TIMER_A_UP_MODE); // Start Timer A
 
+    // Set up interrupt priorities
+    NVIC_SetPriority(TA1_0_IRQn, 1);          // Timer A1 interrupt priority set to 1
+    NVIC_SetPriority(EUSCIA0_IRQn, 0);       // EUSCI A0 UART interrupt priority set to 2
+
+    // Enable interrupts
+    Interrupt_enableInterrupt(EUSCIA0_IRQn);  // Enable EUSCI A0 UART interrupt
+    Interrupt_enableInterrupt(TA1_0_IRQn);    // Enable Timer A1 interrupt
+
+    // Enable Global Interrupts
     Interrupt_enableMaster(); // enable all interrupts
 
     // PWM Configuration
@@ -147,6 +159,7 @@ void main(void)
     // Set initial state
     setPoint = 0;
     UART_sendString("\r\n Select Setpoint from 0'' to 42'' : \n\r");   // Promot User and reset setpoint
+    dataSendTime= currentTimeMillis;
 
 
     while(1){
@@ -156,13 +169,19 @@ void main(void)
         // States of S1 and S2
         sw1_old = sw1_cur;
         sw1_cur = GPIO_getInputPinValue(GPIO_PORT_P1,GPIO_PIN4);
-        //printf("\n sw old: %u --- sw current: %u", sw1_old, sw1_cur);
 
         // On and Off Tracking
         if( sw1_cur == 0 && sw1_old == 1){
             onoff1++;
             if(onoff1 > 1)
                 onoff1 = 0;
+        }
+
+        // ***** SENDING HEIGHT DATA ***** //
+        // If enough time has elapsed, send the height data
+        if (currentTimeMillis - dataSendTime >= 1000) /* checks if 1 second has passed*/ {
+            dataSendTime = currentTimeMillis;
+            sendHeightDataOverUART(height);
         }
 
         // ***** SETPOINT PROCESSING ***** //
@@ -175,7 +194,7 @@ void main(void)
 //            printf("\r\n Duty Cycle: %f ---- To Board: %f", dutyCycle, dutyCycle * ta0ccr0);
 
 //            printf("\r\n Control Signal: %f" , controlSignal);
-            TIMER_A0->CCR[3] = (uint16_t)(controlSignal / 100.0 * ta0ccr0);
+            TIMER_A0->CCR[3] = 2500; //(uint16_t)(controlSignal / 100.0 * ta0ccr0);
         } else{
             GPIO_setOutputLowOnPin(LED2,BLUE);
             TIMER_A0->CCR[3] = 0;
@@ -241,7 +260,6 @@ void EUSCIA0_IRQHandler(){
 
 // Timer Interrupt Handler - triggers at every period (set in config)
   void TA1_0_IRQHandler(){
-      GPIO_toggleOutputOnPin(LED1, RED); // Toggle the LED2 (Blue) pin
 
       // read feed back from ultrasonic sensor
       Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE,TIMER_A_CAPTURECOMPARE_REGISTER_0); // clears timer ate A0 interupt
@@ -251,24 +269,18 @@ void EUSCIA0_IRQHandler(){
       while(ADC14_isBusy()){}     // waits for conversion to finish
       ADCresult = ADC14_getResult(ADC_MEM0) ; // read from memory
       ADCresult = (2.5*(float)ADCresult) /1024.0;
-      height = ( -125 * ADCresult +54);
-
-//      printf("Result = %f \r\n", ADCresult);
-      printf("Height = %d \r\n" , (int)round(height));
+      printf("ADC Result: %f\r\n", ADCresult);
+      if (ADCresult > 0.35) {
+          height = 0;
+          printf("Forced: Height = %d\r\n", (int)round(height));
+      } else {
+          height = (-125 * ADCresult + 54);
+          printf("Else: Height = %d\r\n", (int)round(height));
+      }
       printf("------------------------\r\n");
 
       // Height Hysteresis
       float heightDiff = height - prevHeight;
-
-//      if( heightDiff > hyst){
-//          height = prevHeight;
-//          printf("Hysteresis Used \r\n");
-//      }else if( heightDiff < -hyst){
-//          height = prevHeight;
-//          printf("Hysteresis Used \r\n");
-//      }
-//
-//      prevHeight = height;
 
       // ***** CONTROLLER ***** //
       float error = (float)setPoint - height ; // Calculate Error
@@ -282,7 +294,7 @@ void EUSCIA0_IRQHandler(){
       } else if (controlSignal > 100){
           controlSignal = 100;
       }
-      printf("\r\n\ Test: %u ", (uint16_t)(controlSignal / 100.0 * ta0ccr0) );
+//      printf("\r\n\ Test: %u ", (uint16_t)(controlSignal / 100.0 * ta0ccr0) );
 
       // Clear interrupt flag
       Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE, TIMER_A_CAPTURECOMPARE_REGISTER_0);

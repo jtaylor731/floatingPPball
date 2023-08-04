@@ -22,7 +22,7 @@
 #define RED  GPIO_PIN0
 #define GREEN  GPIO_PIN1
 #define BLUE  GPIO_PIN2
-
+#define SCALE 1000
 
 // GLOBAL VARIABLES
 const uint16_t ta0ccr0 = 3000;
@@ -43,11 +43,11 @@ volatile float hyst = 5; // Hysteresis
 volatile uint16_t setPoint = 0; // Set point
 volatile bool readingUART = false; // monitors if UART is reading or writing
 
-float Kp = 3.5; // Proportional gain
+float Kp = 10.0; // Proportional gain
 float Ki = 0.0; // Integral gain
-float Kd = 0.0; // Derivative gain
+float Kd = 5.0; // Derivative gain
 
-float error = 0; // error
+volatile float error = 0; // error
 float prev_error = 0; // previous error
 float integralTerm = 0; // tracks integral
 float der = 0; // tracks derivative error
@@ -204,16 +204,16 @@ void main(void)
         }
 
         // ***** SETPOINT PROCESSING ***** //
+        // Not used with PID
         dutyCycle = inch2percent( (float)setPoint);
-        //        printf("\r\n Duty Cycle: %f ---- Setpoint: %u", dutyCycle, setPoint);
+
 
         // ***** FAN OF CONTROL ***** //
         if( onoff1 == 1 ){ // if remainder is 1 ... switch 1 is ON
             GPIO_setOutputHighOnPin(LED2,BLUE);
-            //            printf("\r\n Duty Cycle: %f ---- To Board: %f", dutyCycle, dutyCycle * ta0ccr0);
-
-            //            printf("\r\n Control Signal: %f" , controlSignal);
-            TIMER_A0->CCR[3] = 2500; //(uint16_t)(controlSignal / 100.0 * ta0ccr0);
+            printf("\r\n Height: %f ---- Control Signal: %f ---- To Board: %u ---- Error: %f ", height,controlSignal, 2150 + (uint16_t)(controlSignal / 100.0 * 850), error);
+//            printf("\r\n Height: %f ---- ADC: %f ", height, ADCresult);
+            TIMER_A0->CCR[3] = 2150 + (uint16_t)(controlSignal / 100.0 * 850);
         } else{
             GPIO_setOutputLowOnPin(LED2,BLUE);
             TIMER_A0->CCR[3] = 0;
@@ -290,30 +290,29 @@ void TA1_0_IRQHandler(){
     while(ADC14_isBusy()){}     // waits for conversion to finish
     ADCresult = ADC14_getResult(ADC_MEM0) ; // read from memory
     ADCresult = (2.5*(float)ADCresult) /1024.0;
-    height = (-125 * ADCresult + 54);
-    if (ADCresult > 0.42) {
+    height = (-125 * ADCresult + 52);
+    height = (int)round(height);
+    if (ADCresult > 0.45) {
         height = 0;
 //         printf("Forced: Height = %d\r\n", (int)round(height));
     }
-    printf("Height = %d\r\n", (int)round(height));
-    printf("------------------------\r\n");
 
-    // Height Hysteresis
-//    float heightDiff = height - prevHeight;
-//
-//    // ***** CONTROLLER ***** //
-//    float error = (float)setPoint - height ; // Calculate Error
-//    controlSignal = Kp*error  + Ki*integralTerm + Kd*(error - prev_error); // Update PID
-//
-//    integralTerm += error;
-//    prev_error = error;
-//
-//    if (controlSignal < 0 ){ // saturation limit
-//        controlSignal = 0;
-//    } else if (controlSignal > 100){
-//        controlSignal = 100;
-//    }
-    //      printf("\r\n\ Test: %u ", (uint16_t)(controlSignal / 100.0 * ta0ccr0) );
+    // ***** CONTROLLER ***** //
+    error = (float)setPoint - height ; // Calculate Error
+    integralTerm += error;
+
+    // PID control equation
+    controlSignal = Kp*error  + Ki*integralTerm + Kd*(error - prev_error); // Update PID
+
+    // Update error for der
+    prev_error = error;
+
+    // Saturation Limit
+    if (controlSignal < 0 ){
+        controlSignal = 0;
+    } else if (controlSignal > 100){
+        controlSignal = 100;
+    }
 
     // Clear interrupt flag
     Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE, TIMER_A_CAPTURECOMPARE_REGISTER_0);

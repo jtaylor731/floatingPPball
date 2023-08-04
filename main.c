@@ -105,10 +105,12 @@ void main(void)
     //for timers
     WDT_A_holdTimer(); // stop  s WDT
     FPU_enableModule();
-    CS_setDCOFrequency(3E+6); // 1113 MHz
-    CS_initClockSignal(CS_SMCLK, CS_DCOCLK_SELECT, CS_CLOCK_DIVIDER_1);
-    CS_setReferenceOscillatorFrequency(CS_REFO_128KHZ);
-    CS_initClockSignal(CS_ACLK, CS_REFOCLK_SELECT,CS_CLOCK_DIVIDER_1);
+    CS_setDCOFrequency(3E+6); // 3 MHz
+    CS_initClockSignal(CS_SMCLK,CS_DCOCLK_SELECT,CS_CLOCK_DIVIDER_1);
+
+
+    // Disable all Interrupts
+       Interrupt_disableMaster();
 
     // ***** Set Inputs & Outputs ***** //
 
@@ -125,21 +127,20 @@ void main(void)
     UART_enableInterrupt(EUSCI_A0_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT);    // Enable UART receive interrupts
     Interrupt_enableInterrupt(INT_EUSCIA0);
 
-    // ***** UART COM6 SET UP *****//
-    UART_initModule(EUSCI_A1_BASE, &UART_init);
-    UART_enableModule(EUSCI_A1_BASE);
 
-    const char* comPortName = "COM6"; // set COM port
+//    // ***** UART COM6 SET UP *****//
+//    UART_initModule(EUSCI_A1_BASE, &UART_init);
+//    UART_enableModule(EUSCI_A1_BASE);
+//
+//    const char* comPortName = "COM6"; // set COM port
+//
+//    // Check if the serial port was successfully opened
+//    if (EUSCI_A1->CTLW0 & EUSCI_A_CTLW0_SWRST){
+//        // Handle error (unable to open the COM port)
+//        printf("Error: Unable to open COM port %s\n", comPortName);
+//        return;
+//    }
 
-    // Check if the serial port was successfully opened
-    if (EUSCI_A1->CTLW0 & EUSCI_A_CTLW0_SWRST){
-        // Handle error (unable to open the COM port)
-        printf("Error: Unable to open COM port %s\n", comPortName);
-        return;
-    }
-
-    // Disable all Interrupts
-    Interrupt_disableMaster();
 
     //  ***** ADC Configuration ***** //
     ADC14_enableModule(); // initialize module
@@ -161,8 +162,8 @@ void main(void)
     NVIC_SetPriority(EUSCIA0_IRQn, 0);       // EUSCI A0 UART interrupt priority set to 2
 
     // Enable interrupts
-    Interrupt_enableInterrupt(EUSCIA0_IRQn);  // Enable EUSCI A0 UART interrupt
     Interrupt_enableInterrupt(TA1_0_IRQn);    // Enable Timer A1 interrupt
+    Interrupt_enableInterrupt(EUSCIA0_IRQn);  // Enable EUSCI A0 UART interrupt
 
     // Enable Global Interrupts
     Interrupt_enableMaster(); // enable all interrupts
@@ -195,8 +196,9 @@ void main(void)
         {   dataSendTime = currentTimeMillis;
             char heightStr[16]; // Buffer to store the height data as a string
             snprintf(heightStr, sizeof(heightStr), "%.2f\r\n", height);
+//            printf("\r\nHeight String: %s", heightStr);
 //            UART_sendString(heightStr);
-            UART_sendString("\r\n TEST ");
+//            UART_sendString("\r\n TEST ");
             GPIO_toggleOutputOnPin(LED1,RED);
 
         }
@@ -282,44 +284,38 @@ void TA1_0_IRQHandler(){
     Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE,TIMER_A_CAPTURECOMPARE_REGISTER_0); // clears timer ate A0 interupt
     ADC14_toggleConversionTrigger(); // sets SC / trigger bit
 
-
     currentTimeMillis++; // for sending data
-    //          printf("\r\nCurrent Time: %u",currentTimeMillis++);
 
     // ***** READING SENSOR ***** //
     while(ADC14_isBusy()){}     // waits for conversion to finish
     ADCresult = ADC14_getResult(ADC_MEM0) ; // read from memory
     ADCresult = (2.5*(float)ADCresult) /1024.0;
-    //          printf("ADC Result: %f\r\n", ADCresult);
-    if (ADCresult > 0.35) {
+    height = (-125 * ADCresult + 54);
+    if (ADCresult > 0.42) {
         height = 0;
-        //              printf("Forced: Height = %d\r\n", (int)round(height));
-    } else {
-        height = (-125 * ADCresult + 54);
-        //              printf("Else: Height = %d\r\n", (int)round(height));
+//         printf("Forced: Height = %d\r\n", (int)round(height));
     }
-    //          printf("------------------------\r\n");
+    printf("Height = %d\r\n", (int)round(height));
+    printf("------------------------\r\n");
 
     // Height Hysteresis
-    float heightDiff = height - prevHeight;
-
-    // ***** CONTROLLER ***** //
-    float error = (float)setPoint - height ; // Calculate Error
-    controlSignal = Kp*error  + Ki*integralTerm + Kd*(error - prev_error); // Update PID
-
-    integralTerm += error;
-    prev_error = error;
-
-    if (controlSignal < 0 ){ // saturation limit
-        controlSignal = 0;
-    } else if (controlSignal > 100){
-        controlSignal = 100;
-    }
+//    float heightDiff = height - prevHeight;
+//
+//    // ***** CONTROLLER ***** //
+//    float error = (float)setPoint - height ; // Calculate Error
+//    controlSignal = Kp*error  + Ki*integralTerm + Kd*(error - prev_error); // Update PID
+//
+//    integralTerm += error;
+//    prev_error = error;
+//
+//    if (controlSignal < 0 ){ // saturation limit
+//        controlSignal = 0;
+//    } else if (controlSignal > 100){
+//        controlSignal = 100;
+//    }
     //      printf("\r\n\ Test: %u ", (uint16_t)(controlSignal / 100.0 * ta0ccr0) );
 
     // Clear interrupt flag
     Timer_A_clearCaptureCompareInterrupt(TIMER_A1_BASE, TIMER_A_CAPTURECOMPARE_REGISTER_0);
 
 } // end timer interrupt
-
-

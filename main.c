@@ -44,8 +44,8 @@ volatile uint16_t setPoint = 0; // Set point
 volatile bool readingUART = false; // monitors if UART is reading or writing
 
 float Kp = 10.0; // Proportional gain
-float Ki = 0.0; // Integral gain
-float Kd = 5.0; // Derivative gain
+float Ki = 0.25; // Integral gain
+float Kd = 0.0; // Derivative gain
 
 volatile float error = 0; // error
 float prev_error = 0; // previous error
@@ -128,18 +128,21 @@ void main(void)
     Interrupt_enableInterrupt(INT_EUSCIA0);
 
 
-//    // ***** UART COM6 SET UP *****//
-//    UART_initModule(EUSCI_A1_BASE, &UART_init);
-//    UART_enableModule(EUSCI_A1_BASE);
-//
-//    const char* comPortName = "COM6"; // set COM port
-//
-//    // Check if the serial port was successfully opened
-//    if (EUSCI_A1->CTLW0 & EUSCI_A_CTLW0_SWRST){
-//        // Handle error (unable to open the COM port)
-//        printf("Error: Unable to open COM port %s\n", comPortName);
-//        return;
-//    }
+    // ***** UART COM6 SET UP *****//
+    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P3, GPIO_PIN2 | GPIO_PIN3, GPIO_PRIMARY_MODULE_FUNCTION);
+    UART_initModule(EUSCI_A1_BASE, &UART_init);
+    UART_enableModule(EUSCI_A1_BASE);
+    Interrupt_enableInterrupt(INT_EUSCIA1); // Enable EUSCI A1 UART interrupt (COM6)
+
+
+    const char* comPortName = "COM6"; // set COM port
+
+    // Check if the serial port was successfully opened
+    if (EUSCI_A1->STATW & EUSCI_A_STATW_OE) {
+        // Handle error (unable to open the COM port)
+        printf("Error: Unable to open COM port %s\n", comPortName);
+        return;
+    }
 
 
     //  ***** ADC Configuration ***** //
@@ -164,6 +167,8 @@ void main(void)
     // Enable interrupts
     Interrupt_enableInterrupt(TA1_0_IRQn);    // Enable Timer A1 interrupt
     Interrupt_enableInterrupt(EUSCIA0_IRQn);  // Enable EUSCI A0 UART interrupt
+    Interrupt_enableInterrupt(EUSCIA1_IRQn); // Enable EUSCI A1 UART interrupt (COM6)
+
 
     // Enable Global Interrupts
     Interrupt_enableMaster(); // enable all interrupts
@@ -173,7 +178,7 @@ void main(void)
 
     // Set initial state
     setPoint = 0;
-    UART_sendString("\r\n Select Setpoint from 0'' to 42'' : \n\r");   // Promot User and reset setpoint
+    UART_sendString(EUSCI_A0_BASE,"\r\n Select Setpoint from 0'' to 42'' : \n\r");   // Promot User and reset setpoint
     dataSendTime= currentTimeMillis;
 
 
@@ -192,17 +197,24 @@ void main(void)
 
         // ***** SENDING HEIGHT DATA ***** //
         // If enough time has elapsed, send the height data
-        if (currentTimeMillis - dataSendTime >= 5)
-        {   dataSendTime = currentTimeMillis;
-            char heightStr[16]; // Buffer to store the height data as a string
-            snprintf(heightStr, sizeof(heightStr), "%.2f\r\n", height);
-//            printf("\r\nHeight String: %s", heightStr);
-//            UART_sendString(heightStr);
-//            UART_sendString("\r\n TEST ");
-            GPIO_toggleOutputOnPin(LED1,RED);
+//        if (currentTimeMillis - dataSendTime >= 5)
+//        {   dataSendTime = currentTimeMillis;
+//            sendHeightDataOverUART(height);
+//            UART_sendString(EUSCI_A1_BASE,"\r\nTest");
 
+        // ***** SENDING HEIGHT DATA ***** //
+        // If enough time has elapsed, send the height data
+        if (currentTimeMillis - dataSendTime >= 5) {
+            dataSendTime = currentTimeMillis;
+            int bytesSent = UART_sendString(EUSCI_A1_BASE, "\r\nTest");
+            printf("\r\n Byte: %i", bytesSent);
+            // Send a confirmation message
+            if (bytesSent > 0) {
+                UART_sendString(EUSCI_A1_BASE, "\r\nData Sent Successfully");
+            } else {
+                UART_sendString(EUSCI_A1_BASE, "\r\nFailed to Send Data");
+            }
         }
-
         // ***** SETPOINT PROCESSING ***** //
         // Not used with PID
         dutyCycle = inch2percent( (float)setPoint);
@@ -211,9 +223,18 @@ void main(void)
         // ***** FAN OF CONTROL ***** //
         if( onoff1 == 1 ){ // if remainder is 1 ... switch 1 is ON
             GPIO_setOutputHighOnPin(LED2,BLUE);
-            printf("\r\n Height: %f ---- Control Signal: %f ---- To Board: %u ---- Error: %f ", height,controlSignal, 2150 + (uint16_t)(controlSignal / 100.0 * 850), error);
+//            printf("\r\n Height: %f ---- Control Signal: %f ---- To Board: %u ---- Error: %f ", height,controlSignal, 2150 + (uint16_t)(controlSignal / 100.0 * 850), error);
 //            printf("\r\n Height: %f ---- ADC: %f ", height, ADCresult);
             TIMER_A0->CCR[3] = 2150 + (uint16_t)(controlSignal / 100.0 * 850);
+
+            // ***** SENDING HEIGHT DATA ***** //
+            // If enough time has elapsed, send the height data
+//            if (currentTimeMillis - dataSendTime >= 5)
+//            {   dataSendTime = currentTimeMillis;
+//                sendHeightDataOverUART(height);
+//                printf("\r\nHeight: %f", height);
+//                GPIO_toggleOutputOnPin(LED1,RED);
+//            }
         } else{
             GPIO_setOutputLowOnPin(LED2,BLUE);
             TIMER_A0->CCR[3] = 0;
@@ -242,14 +263,14 @@ void EUSCIA0_IRQHandler(){
 
             // Recieved letter process
             while (len < 3  ){
-                char c = UART_receivedChar();
+                char c = UART_receivedChar(EUSCI_A0_BASE);
                 if (c == '\r' || c == '\n' || c == ' '){
                     readingUART = false; // no longer reading
 
                     break;
                 }
 
-                UART_sendChar(c);
+                UART_sendChar(EUSCI_A0_BASE,c);
                 input[len++] = c; // this adds the newest character to the
                 // end of the input string
             }
@@ -258,14 +279,14 @@ void EUSCIA0_IRQHandler(){
 
 
             if(atoi(input) < lowest || atoi(input) > highest){
-                UART_sendString("\r\n Invalid Setpoint. Select number 0 - 42:\r\n ");
+                UART_sendString(EUSCI_A0_BASE,"\r\n Invalid Setpoint. Select number 0 - 42:\r\n ");
 
             }else {
                 input[len] = '\0'; // clears input
                 setPoint = atoi(input); // Convert input string to an integer
-                UART_sendString("\r\n Setpoint: ");
-                UART_sendInt(setPoint);
-                UART_sendString("\r\n Select Setpoint from 0'' to 42'' : \n\r");   // Promot User and reset setpoint
+                UART_sendString(EUSCI_A0_BASE,"\r\n Setpoint: ");
+                UART_sendInt(EUSCI_A0_BASE,setPoint);
+                UART_sendString(EUSCI_A0_BASE,"\r\n Select Setpoint from 0'' to 42'' : \n\r");   // Promot User and reset setpoint
 
             }
         } else {
@@ -275,7 +296,13 @@ void EUSCIA0_IRQHandler(){
         UART_clearInterruptFlag(EUSCI_A0_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT_FLAG);
 
     } // end if enabled and if flagged
-} // end of UART interrupt
+} // end of UART COM5 interrupt
+
+
+void EUSCIA1_IRQHandler() {
+    UART_clearInterruptFlag(EUSCI_A1_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT_FLAG);
+} // end of UART COM6 Interrupt
+
 
 // Timer Interrupt Handler - triggers at every period (set in config)
 void TA1_0_IRQHandler(){
@@ -294,7 +321,6 @@ void TA1_0_IRQHandler(){
     height = (int)round(height);
     if (ADCresult > 0.45) {
         height = 0;
-//         printf("Forced: Height = %d\r\n", (int)round(height));
     }
 
     // ***** CONTROLLER ***** //

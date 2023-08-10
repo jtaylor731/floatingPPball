@@ -23,6 +23,7 @@
 #define GREEN  GPIO_PIN1
 #define BLUE  GPIO_PIN2
 #define SCALE 1000
+#define NUM_READINGS 7
 
 // GLOBAL VARIABLES
 const uint16_t ta0ccr0 = 3000;
@@ -30,12 +31,13 @@ volatile float dutyCycle = 0; // subject to change based on interrupt
 volatile float pot_v;
 volatile float ADCresult;
 volatile float height;
+volatile float sensorReadings[NUM_READINGS] = {0};
 
 unsigned short sw1_cur = 1; // current state of click
 unsigned short sw1_old = 1; // previous state of click
 unsigned short onoff1 = 0; // checks if SW1 'on' or 'off'
 
-float highest = 42; // highest setpoint
+volatile float highest = 42; // highest setpoint
 float lowest = 0; // lowest setpoint
 volatile float prevHeight = 0; // for hysteresis
 volatile float hyst = 5; // Hysteresis
@@ -44,7 +46,7 @@ volatile uint16_t setPoint = 0; // Set point
 volatile bool readingUART = false; // monitors if UART is reading or writing
 
 float Kp = 10.0; // Proportional gain
-float Ki = 0.25; // Integral gain
+float Ki = 0.0; // Integral gain
 float Kd = 0.0; // Derivative gain
 
 volatile float error = 0; // error
@@ -128,23 +130,6 @@ void main(void)
     Interrupt_enableInterrupt(INT_EUSCIA0);
 
 
-    // ***** UART COM6 SET UP *****//
-    GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P3, GPIO_PIN2 | GPIO_PIN3, GPIO_PRIMARY_MODULE_FUNCTION);
-    UART_initModule(EUSCI_A1_BASE, &UART_init);
-    UART_enableModule(EUSCI_A1_BASE);
-    Interrupt_enableInterrupt(INT_EUSCIA1); // Enable EUSCI A1 UART interrupt (COM6)
-
-
-    const char* comPortName = "COM6"; // set COM port
-
-    // Check if the serial port was successfully opened
-    if (EUSCI_A1->STATW & EUSCI_A_STATW_OE) {
-        // Handle error (unable to open the COM port)
-        printf("Error: Unable to open COM port %s\n", comPortName);
-        return;
-    }
-
-
     //  ***** ADC Configuration ***** //
     ADC14_enableModule(); // initialize module
     ADC14_setResolution(ADC_10BIT); // bit res = 10
@@ -167,8 +152,6 @@ void main(void)
     // Enable interrupts
     Interrupt_enableInterrupt(TA1_0_IRQn);    // Enable Timer A1 interrupt
     Interrupt_enableInterrupt(EUSCIA0_IRQn);  // Enable EUSCI A0 UART interrupt
-    Interrupt_enableInterrupt(EUSCIA1_IRQn); // Enable EUSCI A1 UART interrupt (COM6)
-
 
     // Enable Global Interrupts
     Interrupt_enableMaster(); // enable all interrupts
@@ -195,26 +178,7 @@ void main(void)
                 onoff1 = 0;
         }
 
-        // ***** SENDING HEIGHT DATA ***** //
-        // If enough time has elapsed, send the height data
-//        if (currentTimeMillis - dataSendTime >= 5)
-//        {   dataSendTime = currentTimeMillis;
-//            sendHeightDataOverUART(height);
-//            UART_sendString(EUSCI_A1_BASE,"\r\nTest");
 
-        // ***** SENDING HEIGHT DATA ***** //
-        // If enough time has elapsed, send the height data
-        if (currentTimeMillis - dataSendTime >= 5) {
-            dataSendTime = currentTimeMillis;
-            int bytesSent = UART_sendString(EUSCI_A1_BASE, "\r\nTest");
-            printf("\r\n Byte: %i", bytesSent);
-            // Send a confirmation message
-            if (bytesSent > 0) {
-                UART_sendString(EUSCI_A1_BASE, "\r\nData Sent Successfully");
-            } else {
-                UART_sendString(EUSCI_A1_BASE, "\r\nFailed to Send Data");
-            }
-        }
         // ***** SETPOINT PROCESSING ***** //
         // Not used with PID
         dutyCycle = inch2percent( (float)setPoint);
@@ -223,18 +187,8 @@ void main(void)
         // ***** FAN OF CONTROL ***** //
         if( onoff1 == 1 ){ // if remainder is 1 ... switch 1 is ON
             GPIO_setOutputHighOnPin(LED2,BLUE);
-//            printf("\r\n Height: %f ---- Control Signal: %f ---- To Board: %u ---- Error: %f ", height,controlSignal, 2150 + (uint16_t)(controlSignal / 100.0 * 850), error);
-//            printf("\r\n Height: %f ---- ADC: %f ", height, ADCresult);
-            TIMER_A0->CCR[3] = 2150 + (uint16_t)(controlSignal / 100.0 * 850);
-
-            // ***** SENDING HEIGHT DATA ***** //
-            // If enough time has elapsed, send the height data
-//            if (currentTimeMillis - dataSendTime >= 5)
-//            {   dataSendTime = currentTimeMillis;
-//                sendHeightDataOverUART(height);
-//                printf("\r\nHeight: %f", height);
-//                GPIO_toggleOutputOnPin(LED1,RED);
-//            }
+            printf("\r\n Height: %f ---- Control Signal: %f ---- To Board: %u ---- Error: %f ---- Setpoint: %u", height,controlSignal, 1900 + (uint16_t)(controlSignal / 100.0 * 1100), error, setPoint);
+            TIMER_A0->CCR[3] = 1900 + (uint16_t)(controlSignal / 100.0 * 1100);
         } else{
             GPIO_setOutputLowOnPin(LED2,BLUE);
             TIMER_A0->CCR[3] = 0;
@@ -296,13 +250,7 @@ void EUSCIA0_IRQHandler(){
         UART_clearInterruptFlag(EUSCI_A0_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT_FLAG);
 
     } // end if enabled and if flagged
-} // end of UART COM5 interrupt
-
-
-void EUSCIA1_IRQHandler() {
-    UART_clearInterruptFlag(EUSCI_A1_BASE, EUSCI_A_UART_RECEIVE_INTERRUPT_FLAG);
-} // end of UART COM6 Interrupt
-
+} // end of UART interrupt
 
 // Timer Interrupt Handler - triggers at every period (set in config)
 void TA1_0_IRQHandler(){
@@ -322,6 +270,21 @@ void TA1_0_IRQHandler(){
     if (ADCresult > 0.45) {
         height = 0;
     }
+
+    // ***** Moving Average ***** //
+    int i;
+    for (i = NUM_READINGS - 1; i > 0; i--) {
+        sensorReadings[i] = sensorReadings[i - 1];
+    }
+    sensorReadings[0] = height;
+
+    float movingAverage = 0;
+    for (i = 0; i < NUM_READINGS; i++) {
+        movingAverage += sensorReadings[i];
+    }
+    movingAverage /= NUM_READINGS;
+    height = movingAverage;
+
 
     // ***** CONTROLLER ***** //
     error = (float)setPoint - height ; // Calculate Error
